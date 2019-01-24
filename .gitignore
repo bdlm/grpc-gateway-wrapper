@@ -1,0 +1,7 @@
+example/proto/embedded_docs/
+example/proto/go/
+example/proto/js/
+example/proto/php/
+example/proto/swagger/
+example/proto/ts/
+example/vendor/
