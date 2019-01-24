@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+import "google/api/annotations.proto";
+import "protoc-gen-swagger/options/annotations.proto";
+import "protoc-gen-validate/validate/validate.proto";
+
+package grpc.gateway.wrapper;
+
+option go_package = "v1";
+option php_generic_services = true;
+
+// Extra Swagger/OpenAPI documentation
+option (grpc.gateway.protoc_gen_swagger.options.openapiv2_swagger) = {
+    info: {
+        title: "Return Path Proto API";
+        description: "<h2>Basic API Overview</h2><h3>Authentication</h3><p>The API will use HTTP Bearer Authentication over SSL as its authentication mechanism. Credentials will be obtained via the <em>/v2/auth/*</em> endpoints. Please do not share your credentials with untrusted sources.</p><p>Each Return Path service, such as the Authentication Service or the ECM (Email Client Monitor) Service, has its own API that can be selected with the dropdown menu in the top right corner called <em>'Select a spec'</em>.</p><p>Before using the <em>'Try it out!'</em> buttons on each endpoint that requires authentication (everything but the Auth Service), please click the 'Authorize' button at the top right of the page and paste your token in with the following format (replace <em>abc123.xyz.789</em> with your auth token):</p><pre>```Bearer abc123.xyz.789```</pre><br><h3>CRUD Operations</h3><p>HTTP verbs (GET, POST, PUT, DELETE) will be used to Create, Read, Update and Delete data.</p><ul><li>GET – Retrieve resources.</li><li>POST – Creates or Updates a resource.</li><li>PUT – Creates or Updates a resource.</li><li>DELETE – Deletes an existing resource.</li></ul><p>Every attempt is made to comply with RESTful standards and best practices; however, please refer to any specific instructions provided to you by your Return Path contact.</p><br><p>Example of a simple GET request via curl with bearer HTTP Authentication:</p><pre>```curl -X GET \"https://api.returnpath.com/v2/ecm/pixel_counts?start=2018-10-01T00%3A00%3A00Z&end=2018-10-02T00%3A00%3A00Z\" -H \"Accept: application/json\" -H \"Authorization: Bearer abc123.xyz.789\"```</pre><br><h3>Output</h3><p>The results from successful requests will be returned in JSON format with an HTTP status code (for example, status code 200 for a successful call).</p><p>Example response body on success:</p><pre>```{ \"total\": 12 }```</pre><br><p>Errors will be returned in JSON format with an appropriate HTTP status code.</p><p>Example response body on failure:</p><pre>```{ \"error\": \"Request unauthenticated with bearer\" }```</pre><br><h2>Auth endpoint overview</h2><p>The Return Path Authentication Service is used to obtain, manage, and validate access tokens to Return Path's API's.</p><p>Example of a simple request via curl:</p><pre>```curl -X POST \"https://api.returnpath.com/v2/auth/login\" -H \"Accept: application/json\" -H \"Content-Type: application/json\" -d \'{ \"username\": \"myname@mycompany.com\", \"password\": \"myPassword123\"}\'```</pre><br><p>Example response body on success:</p><pre>```{ \"token\": \"abc123.xyz.789\" }```</pre>";
+        version: "1.0";
+    };
+    host: "api.returnpath.com";
+    schemes: HTTPS;
+    consumes: "application/json";
+    consumes: "application/x-www-form-urlencoded";
+    produces: "application/json";
+};
+
+// Service orchestration probes
+service K8S {
+    rpc LivenessProbe(NilMsg) returns (ProbeResult) {
+        option (google.api.http) = {
+            get: "/k8s/alive"
+        };
+    }
+    rpc ReadinessProbe(NilMsg) returns (ProbeResult) {
+        option (google.api.http) = {
+            get: "/k8s/ready"
+        };
+    }
+}
+
+message NilMsg {}
+
+message ProbeResult {
+    bool fail = 1;
+}

@@ -1,0 +1,45 @@
+version: '3.5'
+services:
+    generate:
+        container_name: grpc-gateway-wrapper.generate
+        image: proto-generate:latest
+        build:
+            context: ../_build
+            dockerfile: ./Dockerfile
+        volumes:
+            - .:/go/src/github.com/bdlm/grpc-gateway-wrapper/example
+        working_dir: /go/src/github.com/bdlm/grpc-gateway-wrapper/example
+        command:
+            - "./proto"
+    wrapper:
+        container_name: grpc-gateway-wrapper
+        hostname: grpc-gateway-wrapper
+        image: grpc-gateway-wrapper
+        restart: always
+        build:
+            context: .
+            dockerfile: ./Dockerfile
+        networks:
+            - traefik-proxy
+        ports:
+            - 80
+            - 50051
+        environment:
+            - SERVER_ENV=dev
+            - LOG_LEVEL=debug
+            - REST_ADDRESS=:80
+            - GRPC_ADDRESS=:50051
+        volumes:
+            - .:/go/src/github.com/bdlm/grpc-gateway-wrapper/example
+        entrypoint: sh
+        command:
+            - "-cexu"
+            - "cd /go/src/github.com/bdlm/grpc-gateway-wrapper/example && go build -buildmode=pie -o /go/bin/grpc-gateway-wrapper && /go/bin/grpc-gateway-wrapper"
+        labels:
+            - traefik.docker.network=traefik-proxy
+            - traefik.frontend.rule=Host:grpc-gateway-wrapper.localhost
+            - traefik.port=80
+
+networks:
+    traefik-proxy:
+        name: traefik-proxy

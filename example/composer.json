@@ -1,0 +1,18 @@
+{
+    "name": "rp/mkenney",
+    "type": "library",
+    "description": "Test proto library for PHP",
+    "keywords": ["proto"],
+    "homepage": "https://github.com/bdlm/grpc-gateway-wrapper",
+    "require": {
+        "php": ">=7"
+    },
+    "autoload": {
+        "psr-4": {
+            "GPBMetadata\\": "proto/php/v1/GPBMetadata",
+            "GPBMetadata\\ProtocGenSwagger\\": "proto/php/protoc-gen-swagger/GPBMetadata/ProtocGenSwagger",
+            "GPBMetadata\\ProtocGenValidate\\": "proto/php/protoc-gen-validate/GPBMetadata/ProtocGenValidate",
+            "Bdlm\\Grpc\\Gateway\\Wrapper": "proto/php/v1/Grpc/Gateway/Wrapper"
+        }
+    }
+}

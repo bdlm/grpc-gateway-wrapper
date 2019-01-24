@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"crypto/sha1"
+	"encoding/base64"
 )
 
 // JSONPbMarshaller is the marshaller used for serializing protobuf messages.
@@ -56,14 +58,14 @@ func (li *Interceptor) UnaryInterceptor(
 
 	// Base fields
 	fields := map[string]interface{}{
-		"service": path.Dir(info.FullMethod)[1:],
-		"method":  path.Base(info.FullMethod),
+		"gateway-service": path.Dir(info.FullMethod)[1:],
+		"gateway-method":  path.Base(info.FullMethod),
 	}
 
 	// Request Payload Value
 	if li.LogUnaryReqMsg {
 		if pb, ok := req.(proto.Message); ok {
-			fields["value"] = &jsonpbMarshalleble{pb}
+			fields["gateway-request"] = pb
 		}
 	}
 
@@ -129,21 +131,28 @@ func addFieldsAndLogRequest(ctx context.Context, fields map[string]interface{}, 
 
 	// metadata and headers.
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if ua := md["grpcgateway-user-agent"]; len(ua) != 0 {
-			fields["ua"] = ua[0]
-		} else if ua = md["user-agent"]; len(ua) != 0 {
-			fields["ua"] = ua[0]
+		for k, v := range md {
+			switch k {
+			case "grpcgateway-user-agent":
+				fields["user-agent"] = v
+			case "grpcgateway-referer":
+				fields["referrer"] = v
+			default:
+				fields[k] = v
+			}
 		}
-		if ref := md["grpcgateway-referer"]; len(ref) != 0 {
-			fields["referer"] = ref[0]
-		} else if ref = md["referer"]; len(ref) != 0 {
-			fields["referer"] = ref[0]
+
+		requestID := ""
+		if v, ok := fields["user-agent"]; ok {
+			requestID = fmt.Sprintf("%s%s", requestID, v)
 		}
-		if host := md["x-forwarded-host"]; len(host) != 0 {
-			fields["host"] = host[0]
+		if v, ok := fields["x-forwarded-for"]; ok {
+			requestID = fmt.Sprintf("%s%s", requestID, v)
 		}
-		if ip := md["x-forwarded-for"]; len(ip) != 0 {
-			fields["ip"] = ip[0]
+		if "" != requestID {
+			hasher := sha1.New()
+			hasher.Write([]byte(requestID))
+			fields[":request-id"] = base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 		}
 	}
 
