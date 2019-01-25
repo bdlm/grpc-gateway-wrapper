@@ -74,7 +74,7 @@ func init() {
 }
 
 // - create the application context and start a signal handler.
-// - init the grpc-gateway multiplexer and register it with the protobuf handler.
+// - init the grpc-gateway multiplexer and add the protobuf-generated handlers.
 // - add the grpc-gateway router middleware.
 // - init the gRPC server and register it with the protobuf implementation.
 // - init the TCP connection handler.
@@ -111,7 +111,7 @@ func main() {
 			OrigName:     true, // encode JSON properties as defined in the protobuf (don't convert to CamelCase).
 		}}),
 		// add all HTTP headers to the gRPC request context.
-		runtime.WithIncomingHeaderMatcher(func(headerName string) (mdName string, ok bool) {
+		runtime.WithIncomingHeaderMatcher(func(headerName string) (string, bool) {
 			return headerName, true
 		}),
 	)
@@ -127,21 +127,27 @@ func main() {
 		panic(errors.Wrap(err, "unable to register the grpc-gateway multiplexer with the gRPC server"))
 	}
 
-	// add the grpc-gateway router middleware.
+	// create a HTTP router that passes all requests to the grpc-gateway handlers.
 	Router = chi.NewRouter()
-	Router.With(
-		middleware.RedirectSlashes, // redirect requests with trailing path slash
-		cors.AllowAll().Handler,    // CORS
-		middleware.DefaultCompress, // GZIP compression
+	Router.Use(
+		cors.AllowAll().Handler, // CORS
 	)
 	Router.NotFound(Mux.ServeHTTP)
 	Router.MethodNotAllowed(Mux.ServeHTTP)
+	Router.With(
+		middleware.RedirectSlashes, // redirect requests with trailing path slash
+		middleware.DefaultCompress, // GZIP compression
+	)
+
+	// logInterceptor is a middleware to log all HTTP requests and gRPC
+	// responses.
+	logInterceptor := log_interceptor.Interceptor{
+		LogStreamRecvMsg: true,
+		LogStreamSendMsg: true,
+		LogUnaryReqMsg:   true,
+	}
 
 	// init the gRPC server and register it with the protobuf implementation.
-	logInterceptor := log_interceptor.Interceptor{
-		LogUnaryReqMsg:   true,
-		LogStreamRecvMsg: true,
-	}
 	grpcServer := grpc.NewServer(
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
 			logInterceptor.StreamInterceptor, // automatically log requests
@@ -152,10 +158,10 @@ func main() {
 	)
 	pb.RegisterK8SServer(grpcServer, RPC{})
 
-	// init the TCP connection handlers.
+	// init the TCP connection manager.
 	tcpServer, err := server.New(Ctx, Router, grpcServer)
 	if nil != err {
-		panic(errors.Wrap(err, "could not initialize the TCP handlers"))
+		panic(errors.Wrap(err, "could not initialize the TCP connection manager"))
 	}
 
 	// start the gRPC and HTTP servers.

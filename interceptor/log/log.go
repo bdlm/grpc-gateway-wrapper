@@ -23,28 +23,12 @@ import (
 	"encoding/base64"
 )
 
-// JSONPbMarshaller is the marshaller used for serializing protobuf messages.
-var JSONPbMarshaller = &jsonpb.Marshaler{EmitDefaults: false, OrigName: true}
-
-// ctxKeyFields is the key to use to lookup the logging fields map
-type ctxKeyFields struct{}
-
-// GetFields returns the log fields set so far.
-func GetFields(ctx context.Context) map[string]interface{} {
-	if ctx != nil {
-		if fields, ok := ctx.Value(ctxKeyFields{}).(map[string]interface{}); ok {
-			return fields
-		}
-	}
-	return map[string]interface{}{}
-}
-
 // Interceptor contains gRPC interceptor middleware methods that logs the
 // request as it comes in and the response as it goes out.
 type Interceptor struct {
-	LogUnaryReqMsg   bool // LogUnaryReqMsg if true will log out the contents of the request message/argument/parameters
 	LogStreamRecvMsg bool // LogStreamRecvMsg if true will log out the contents of each received stream message
 	LogStreamSendMsg bool // LogStreamSendMsg if true will log out the contents of each sent stream message
+	LogUnaryReqMsg   bool // LogUnaryReqMsg if true will log out the contents of the request message/argument/parameters
 }
 
 // UnaryInterceptor is a grpc interceptor middleware that logs out the request
@@ -55,6 +39,7 @@ func (li *Interceptor) UnaryInterceptor(
 	info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler,
 ) (interface{}, error) {
+	start := time.Now()
 
 	// Base fields
 	fields := map[string]interface{}{
@@ -70,16 +55,15 @@ func (li *Interceptor) UnaryInterceptor(
 	}
 
 	// Add other fields and log the request started
-	addFieldsAndLogRequest(ctx, fields, "request (unary)")
+	logRequest(ctx, fields, "request (unary)")
 
 	// Call the handler
-	start := time.Now()
-	ctx = context.WithValue(ctx, ctxKeyFields{}, fields)
+	ctx = context.WithValue(ctx, ctxKey{}, fields)
 	resp, err := handler(ctx, req)
 
 	// Calculate elapsed time and log the response
 	// Re-extract the log fields, as they may have changed
-	addFieldsAndLogResponse(GetFields(ctx), start, err, "response (unary)")
+	logResponse(ctx, start, err, "response (unary)")
 
 	// Return the response and error
 	return resp, err
@@ -93,6 +77,7 @@ func (li *Interceptor) StreamInterceptor(
 	info *grpc.StreamServerInfo,
 	handler grpc.StreamHandler,
 ) error {
+	start := time.Now()
 
 	// Get the wrapped server stream in order to access any modified context
 	// from other interceptors
@@ -110,36 +95,28 @@ func (li *Interceptor) StreamInterceptor(
 	streamEntry := log.WithFields(log.Fields(fields))
 
 	// Add other fields and log the request started
-	addFieldsAndLogRequest(ctx, fields, "request (stream)")
-	wrapped.WrappedContext = context.WithValue(ctx, ctxKeyFields{}, fields)
+	logRequest(ctx, fields, "request (stream)")
+	wrapped.WrappedContext = context.WithValue(ctx, ctxKey{}, fields)
 
 	// Call the handler
-	start := time.Now()
 	err := handler(srv, &loggingServerStream{ServerStream: wrapped, entry: streamEntry, li: li})
 
 	// Calculate elapsed time and log the response
 	// Re-extract the log fields, as they may have changed
-	addFieldsAndLogResponse(GetFields(wrapped.Context()), start, err, "response (stream)")
+	logResponse(wrapped.Context(), start, err, "response (stream)")
 
 	// Return the error
 	return err
 }
 
-// addFieldsAndLogRequest adds additional log fields for the peer address and
-// metadata, and then will log out the request access at info level.
-func addFieldsAndLogRequest(ctx context.Context, fields map[string]interface{}, msg string) {
+// logRequest adds additional log fields for the peer address and metadata,
+// and then will log out the request access at info level.
+func logRequest(ctx context.Context, fields map[string]interface{}, msg string) {
 
 	// metadata and headers.
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		for k, v := range md {
-			switch k {
-			case "grpcgateway-user-agent":
-				fields["user-agent"] = v
-			case "grpcgateway-referer":
-				fields["referrer"] = v
-			default:
-				fields[k] = v
-			}
+			fields[k] = v
 		}
 
 		requestID := ""
@@ -150,9 +127,9 @@ func addFieldsAndLogRequest(ctx context.Context, fields map[string]interface{}, 
 			requestID = fmt.Sprintf("%s%s", requestID, v)
 		}
 		if "" != requestID {
-			hasher := sha1.New()
-			hasher.Write([]byte(requestID))
-			fields[":request-id"] = base64.URLEncoding.EncodeToString(hasher.Sum(nil))
+			hash := sha1.New()
+			hash.Write([]byte(requestID))
+			fields[":request-id"] = base64.URLEncoding.EncodeToString(hash.Sum(nil))
 		}
 	}
 
@@ -176,9 +153,23 @@ func addFieldsAndLogRequest(ctx context.Context, fields map[string]interface{}, 
 	log.WithFields(log.Fields(fields)).Info(msg)
 }
 
-// addFieldsAndLogResponse calculates the elapsed time and the status code,
-// and then will log out the response has finished at an appropriate level.
-func addFieldsAndLogResponse(fields map[string]interface{}, start time.Time, err error, msg string) {
+// marshaller is the marshaller used for serializing protobuf messages.
+var marshaller = &jsonpb.Marshaler{
+	EmitDefaults: true,
+	OrigName: true,
+}
+
+// ctxKey is the key to use to lookup the logging fields map in the context.
+type ctxKey struct{}
+
+// logResponse calculates the elapsed time and the status code, and then
+// will log out the response has finished at an appropriate level.
+func logResponse(ctx context.Context, start time.Time, err error, msg string) {
+	var fields map[string]interface{}
+	var ok bool
+	if fields, ok = ctx.Value(ctxKey{}).(map[string]interface{}); !ok {
+		fields = map[string]interface{}{}
+	}
 
 	// Calculate the elapsed time
 	fields["elapsed"] = time.Since(start).Nanoseconds()
@@ -192,15 +183,15 @@ func addFieldsAndLogResponse(fields map[string]interface{}, start time.Time, err
 	levelLog(log.WithFields(log.Fields(fields)), DefaultCodeToLevel(code), msg)
 }
 
-// jsonpbMarshalleble lets a proto interface be marshalled into json
-type jsonpbMarshalleble struct {
+// jsonpbMarshaler lets a proto interface be marshalled into json
+type jsonpbMarshaler struct {
 	proto.Message
 }
 
-// MarshalJSON lets jsonpbMarshalleble implement json interface
-func (j *jsonpbMarshalleble) MarshalJSON() ([]byte, error) {
+// MarshalJSON lets jsonpbMarshaler implement json interface
+func (j *jsonpbMarshaler) MarshalJSON() ([]byte, error) {
 	b := &bytes.Buffer{}
-	if err := JSONPbMarshaller.Marshal(b, j.Message); err != nil {
+	if err := marshaller.Marshal(b, j.Message); err != nil {
 		return nil, fmt.Errorf("jsonpb serializer failed: %v", err)
 	}
 	return b.Bytes(), nil
@@ -242,7 +233,7 @@ func logProtoMessageAsJSON(
 	msg string,
 ) {
 	if p, ok := pbMsg.(proto.Message); ok {
-		levelLog(entry.WithFields(log.Fields{key: &jsonpbMarshalleble{p}, "code": code}), DefaultCodeToLevel(code), msg)
+		levelLog(entry.WithFields(log.Fields{key: &jsonpbMarshaler{p}, "code": code}), DefaultCodeToLevel(code), msg)
 	} else {
 		levelLog(entry.WithField("code", code), DefaultCodeToLevel(code), msg)
 	}
@@ -274,80 +265,39 @@ func DefaultCodeToLevel(code codes.Code) std.Level {
 		return log.InfoLevel
 	case codes.Canceled:
 		return log.InfoLevel
-	case codes.Unknown:
-		return log.ErrorLevel
 	case codes.InvalidArgument:
 		return log.InfoLevel
-	case codes.DeadlineExceeded:
-		return log.WarnLevel
 	case codes.NotFound:
 		return log.InfoLevel
 	case codes.AlreadyExists:
 		return log.InfoLevel
-	case codes.PermissionDenied:
-		return log.WarnLevel
 	case codes.Unauthenticated:
-		return log.InfoLevel // unauthenticated requests can happen
-	case codes.ResourceExhausted:
-		return log.WarnLevel
-	case codes.FailedPrecondition:
-		return log.WarnLevel
-	case codes.Aborted:
-		return log.WarnLevel
-	case codes.OutOfRange:
-		return log.WarnLevel
-	case codes.Unimplemented:
-		return log.ErrorLevel
-	case codes.Internal:
-		return log.ErrorLevel
-	case codes.Unavailable:
-		return log.WarnLevel
-	case codes.DataLoss:
-		return log.ErrorLevel
-	default:
-		return log.ErrorLevel
-	}
-}
+		return log.InfoLevel
 
-// DefaultClientCodeToLevel is the default implementation of gRPC return codes
-// to log levels for client side.
-func DefaultClientCodeToLevel(code codes.Code) std.Level {
-	switch code {
-	case codes.OK:
-		return log.DebugLevel
-	case codes.Canceled:
-		return log.DebugLevel
-	case codes.Unknown:
-		return log.InfoLevel
-	case codes.InvalidArgument:
-		return log.DebugLevel
 	case codes.DeadlineExceeded:
-		return log.InfoLevel
-	case codes.NotFound:
-		return log.DebugLevel
-	case codes.AlreadyExists:
-		return log.DebugLevel
-	case codes.PermissionDenied:
-		return log.InfoLevel
-	case codes.Unauthenticated:
-		return log.InfoLevel // unauthenticated requests can happen
-	case codes.ResourceExhausted:
-		return log.DebugLevel
-	case codes.FailedPrecondition:
-		return log.DebugLevel
-	case codes.Aborted:
-		return log.DebugLevel
-	case codes.OutOfRange:
-		return log.DebugLevel
-	case codes.Unimplemented:
 		return log.WarnLevel
-	case codes.Internal:
+	case codes.PermissionDenied:
+		return log.WarnLevel
+	case codes.ResourceExhausted:
+		return log.WarnLevel
+	case codes.FailedPrecondition:
+		return log.WarnLevel
+	case codes.Aborted:
+		return log.WarnLevel
+	case codes.OutOfRange:
 		return log.WarnLevel
 	case codes.Unavailable:
 		return log.WarnLevel
+
+	case codes.Unknown:
+		return log.ErrorLevel
+	case codes.Unimplemented:
+		return log.ErrorLevel
+	case codes.Internal:
+		return log.ErrorLevel
 	case codes.DataLoss:
-		return log.WarnLevel
+		return log.ErrorLevel
 	default:
-		return log.InfoLevel
+		return log.ErrorLevel
 	}
 }
